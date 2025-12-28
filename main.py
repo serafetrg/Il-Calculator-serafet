@@ -35,7 +35,7 @@ class CompositionPoint:
     sol_pct: float
     usdc_pct: float
     lp_value: float
-    hodl_value: float  # Added for charting
+    hodl_value: float
 
 def position_amounts_at_price(L: float, Pa: float, Pb: float, P: float) -> Tuple[float, float]:
     sqrtP = sqrt(P)
@@ -184,7 +184,6 @@ st.markdown("Optimal short distribution to hedge an Anchor -> Lower Bound LP pos
 with st.sidebar:
     st.header("Configuration")
     
-    # WRAP INPUTS IN A FORM so they don't auto-update
     with st.form(key='lp_config_form'):
         DEPOSIT = st.number_input("Deposit ($)", value=1000.0, step=100.0)
         ANCHOR = st.number_input("Anchor Price ($)", value=166.0, step=0.1, format="%.4f")
@@ -204,13 +203,11 @@ with st.sidebar:
         # CONFIRM BUTTON
         submit_button = st.form_submit_button(label='Run Calculation', type="primary")
 
-# Initialize session state for first load
 if 'first_load' not in st.session_state:
     st.session_state.first_load = True
 
-# Run Logic if Submitted OR First Load
 if submit_button or st.session_state.first_load:
-    st.session_state.first_load = False # Disable auto-run for subsequent reloads
+    st.session_state.first_load = False 
 
     # --- Calculation ---
     points, lp_state = generate_data(LINES, DEPOSIT, ANCHOR, LOWER_PCT, UPPER_PCT)
@@ -225,7 +222,7 @@ if submit_button or st.session_state.first_load:
         else:
             st.warning(f"⚠️ **Order Size Warning**: Current lines ({LINES}) exceeds max valid ({max_valid}). Some orders are < ${MIN_NOTIONAL}.")
 
-        # --- Key Metrics (Top Row) ---
+        # --- Key Metrics ---
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("HODL Value @ Lower", f"${metrics['hodl']:,.2f}")
         m2.metric("LP Value @ Lower", f"${metrics['lp_val']:,.2f}", delta=f"-${metrics['il']:,.2f} IL", delta_color="inverse")
@@ -238,14 +235,17 @@ if submit_button or st.session_state.first_load:
             df_data.append({
                 "Side": pt.side,
                 "Price": pt.price,
-                "SOL Δ (Size)": pt.sol_delta,
-                "Order Value ($)": pt.sol_delta * pt.price,
-                "Total SOL": pt.sol_amount,
-                "LP Value": pt.lp_value,
-                "USDC Value": pt.usdc_amount,
-                "SOL Value": pt.sol_amount * pt.price,
+                "SOL Δ": pt.sol_delta,
+                "SOL Amount": pt.sol_amount,
+                "USDC Amount": pt.usdc_amount,
+                "SOL %": pt.sol_pct,
+                "USDC %": pt.usdc_pct,
+                "LP Value ($)": pt.lp_value,
+                # Extra hidden columns for charts/logic
+                "Order Value": pt.sol_delta * pt.price,
                 "HODL Value": pt.hodl_value,
-                "Asset Comp": f"{pt.sol_pct:.1f}% SOL / {pt.usdc_pct:.1f}% USDC"
+                "USDC Value": pt.usdc_amount,
+                "SOL Value": pt.sol_amount * pt.price
             })
         df = pd.DataFrame(df_data)
 
@@ -255,23 +255,28 @@ if submit_button or st.session_state.first_load:
         with tab_grid:
             st.subheader("Execution Order Grid")
             
-            # Highlight rows based on Min Order
+            # 1. Define exact columns from original tool
+            cols_to_show = ["Side", "Price", "SOL Δ", "SOL Amount", "USDC Amount", "SOL %", "USDC %", "LP Value ($)"]
+
+            # 2. Logic to highlight rows (re-calculating value on the fly since we aren't showing the column)
             def highlight_small_orders(row):
-                color = '#ff4b4b20' if row['Order Value ($)'] < MIN_NOTIONAL else ''
+                val = row['SOL Δ'] * row['Price']
+                color = '#ff4b4b20' if val < MIN_NOTIONAL else ''
                 return [f'background-color: {color}' for _ in row]
 
-            display_cols = ["Side", "Price", "SOL Δ (Size)", "Order Value ($)", "Total SOL", "LP Value", "Asset Comp"]
-            
+            # 3. Format specifiers matching your python script
             st.dataframe(
-                df[display_cols].style.apply(highlight_small_orders, axis=1).format({
+                df[cols_to_show].style.apply(highlight_small_orders, axis=1).format({
                     "Price": "{:.4f}",
-                    "SOL Δ (Size)": "{:.6f}",
-                    "Order Value ($)": "{:.2f}",
-                    "Total SOL": "{:.4f}",
-                    "LP Value": "{:.2f}",
+                    "SOL Δ": "{:.8f}",
+                    "SOL Amount": "{:.8f}",
+                    "USDC Amount": "{:.8f}",
+                    "SOL %": "{:.2f}%",
+                    "USDC %": "{:.2f}%",
+                    "LP Value ($)": "{:.2f}",
                 }),
                 use_container_width=True,
-                height=500
+                height=600
             )
 
             csv = df.to_csv(index=False).encode('utf-8')
@@ -282,7 +287,6 @@ if submit_button or st.session_state.first_load:
             
             with col_c1:
                 st.subheader("Asset Composition")
-                # Stacked Area Chart
                 fig_comp = go.Figure()
                 fig_comp.add_trace(go.Scatter(
                     x=df['Price'], y=df['USDC Value'], mode='lines', stackgroup='one', name='USDC',
@@ -296,16 +300,15 @@ if submit_button or st.session_state.first_load:
                     xaxis_title="Price (Descending)", 
                     yaxis_title="Value ($)", 
                     title="LP Value Breakdown (USDC vs SOL)",
-                    xaxis=dict(autorange="reversed") # Price drops from left to right
+                    xaxis=dict(autorange="reversed")
                 )
                 st.plotly_chart(fig_comp, use_container_width=True)
 
             with col_c2:
                 st.subheader("Hedge Order Sizing")
-                # Bar chart for Order Sizes
                 fig_bar = px.bar(
-                    df, x="Price", y="Order Value ($)", 
-                    color="Order Value ($)",
+                    df, x="Price", y="Order Value", 
+                    color="Order Value",
                     title="Order Size per Checkpoint",
                     color_continuous_scale="Viridis"
                 )
@@ -313,11 +316,10 @@ if submit_button or st.session_state.first_load:
                 fig_bar.add_hline(y=MIN_NOTIONAL, line_dash="dot", line_color="red", annotation_text="Min Limit")
                 st.plotly_chart(fig_bar, use_container_width=True)
 
-            # Extra Chart: IL Trajectory
             st.subheader("Impermanent Loss Trajectory")
             fig_il = go.Figure()
             fig_il.add_trace(go.Scatter(x=df['Price'], y=df['HODL Value'], mode='lines', name='HODL', line=dict(dash='dash', color='gray')))
-            fig_il.add_trace(go.Scatter(x=df['Price'], y=df['LP Value'], mode='lines', name='LP Value', line=dict(color='orange')))
+            fig_il.add_trace(go.Scatter(x=df['Price'], y=df['LP Value ($)'], mode='lines', name='LP Value', line=dict(color='orange')))
             fig_il.update_layout(
                 xaxis_title="Price", 
                 yaxis_title="Total Value ($)", 
